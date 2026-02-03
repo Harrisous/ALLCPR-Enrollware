@@ -13,6 +13,12 @@
 - 可见模式：HEADLESS=false（默认，用于调试）
 - Headless + Xvfb：HEADLESS=true USE_XVFB=true（推荐，Linux 系统）
 - 标准 Headless：HEADLESS=true（已优化，但可能被检测）
+
+Chrome Profile 使用（绕过 AWS IP 被标记）：
+- 本地成功登录后，设置 CHROME_PROFILE_DIR=./chrome_profile 保存 profile
+- 将 chrome_profile 目录复制到 AWS 环境
+- 在 AWS 中设置 CHROME_PROFILE_DIR=./chrome_profile 使用保存的 profile
+- Profile 包含 cookies、缓存和浏览器指纹，有助于绕过 Cloudflare 检测
 """
 import logging
 import os
@@ -113,7 +119,7 @@ def start_xvfb(display_num: str = ":99") -> Optional[subprocess.Popen]:
         return None
 
 
-def create_chrome_driver(headless: bool = False, use_xvfb: bool = False) -> uc.Chrome:
+def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_data_dir: Optional[str] = None) -> uc.Chrome:
     """
     使用 undetected-chromedriver 创建 Chrome WebDriver。
     
@@ -122,16 +128,25 @@ def create_chrome_driver(headless: bool = False, use_xvfb: bool = False) -> uc.C
     Args:
         headless: 是否使用无头模式（默认 False，便于观察和调试）
         use_xvfb: 是否使用 Xvfb 虚拟显示（仅 Linux，推荐用于 headless 模式）
+        user_data_dir: Chrome profile 数据目录路径（如果提供，将使用该目录保存 cookies、缓存等）
 
     Returns:
         uc.Chrome: undetected-chromedriver 实例
     """
-    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s，use_xvfb=%s）...", 
-                 headless, use_xvfb)
+    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s，use_xvfb=%s，user_data_dir=%s）...", 
+                 headless, use_xvfb, user_data_dir if user_data_dir else "默认临时目录")
     
     try:
         # 配置 Chrome 选项
         options = uc.ChromeOptions()
+        
+        # 如果指定了 user_data_dir，使用它来保存 profile 数据
+        if user_data_dir:
+            # 确保目录存在
+            os.makedirs(user_data_dir, exist_ok=True)
+            options.user_data_dir = user_data_dir
+            logging.info(f"使用 Chrome profile 目录: {user_data_dir}")
+            logging.info("这将保存 cookies、缓存和浏览器指纹信息，有助于绕过 Cloudflare 检测")
         
         if headless and not use_xvfb:
             # 使用新的 headless 模式，并添加更多反检测参数
@@ -757,6 +772,21 @@ def main() -> int:
     # 设置 USE_XVFB=true 来启用 Xvfb 虚拟显示
     use_xvfb = os.getenv("USE_XVFB", "false").lower() == "true"
     
+    # 读取 Chrome profile 目录（用于保存 cookies、缓存等，有助于绕过 Cloudflare）
+    # 如果本地成功登录后，可以将 profile 目录复制到 AWS 使用
+    chrome_profile_dir = os.getenv("CHROME_PROFILE_DIR", "").strip()
+    if chrome_profile_dir:
+        # 检查目录是否存在
+        if os.path.exists(chrome_profile_dir):
+            logging.info(f"检测到 Chrome profile 目录: {chrome_profile_dir}")
+            logging.info("将使用该目录中的 cookies、缓存和浏览器指纹信息")
+        else:
+            logging.warning(f"Chrome profile 目录不存在，将创建: {chrome_profile_dir}")
+            os.makedirs(chrome_profile_dir, exist_ok=True)
+    else:
+        logging.info("未指定 CHROME_PROFILE_DIR，将使用临时目录（数据不会保存）")
+        chrome_profile_dir = None
+    
     # 如果 headless=True 且未指定 USE_XVFB，在 Linux 上自动尝试使用 Xvfb
     if is_headless and not use_xvfb and sys.platform == "linux":
         logging.info("检测到 headless 模式，建议使用 Xvfb 以提高 Cloudflare 绕过成功率")
@@ -782,7 +812,7 @@ def main() -> int:
         # 创建 Chrome（根据环境变量决定是否 headless）
         mode_description = "headless (Xvfb)" if (is_headless and use_xvfb) else ("headless" if is_headless else "visible")
         logging.info("运行模式: %s", mode_description)
-        driver = create_chrome_driver(headless=is_headless, use_xvfb=use_xvfb)
+        driver = create_chrome_driver(headless=is_headless, use_xvfb=use_xvfb, user_data_dir=chrome_profile_dir)
 
         # 执行人类化登录
         success = perform_humanlike_login(driver, username, password)

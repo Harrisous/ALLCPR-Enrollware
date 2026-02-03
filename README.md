@@ -169,6 +169,48 @@ python login_humanlike.py
 **环境变量说明：**
 - `HEADLESS=true`：启用 headless 模式（默认：`true`）
 - `USE_XVFB=true`：启用 Xvfb 虚拟显示（仅 Linux，默认：`false`）
+- `CHROME_PROFILE_DIR=./chrome_profile`：指定 Chrome profile 目录（用于保存 cookies、缓存等）
+
+#### Chrome Profile 方法（推荐用于 AWS 环境）
+如果本地可以成功登录但 AWS 环境不行（IP 被 Cloudflare 标记），可以使用 Chrome Profile 方法：
+
+**步骤 1：在本地保存 Profile**
+```bash
+# 1. 在本地运行一次成功登录
+export HEADLESS=false
+export CHROME_PROFILE_DIR=./chrome_profile
+python login_humanlike.py
+
+# 2. 登录成功后，chrome_profile 目录会包含 cookies、缓存等信息
+```
+
+**步骤 2：将 Profile 复制到 AWS**
+```bash
+# 将整个 chrome_profile 目录打包
+tar -czf chrome_profile.tar.gz chrome_profile/
+
+# 上传到 AWS（使用 scp 或其他方式）
+scp chrome_profile.tar.gz user@aws-server:/path/to/enrollware_login/
+```
+
+**步骤 3：在 AWS 中使用 Profile**
+```bash
+# 在 AWS 环境中解压
+cd /path/to/enrollware_login
+tar -xzf chrome_profile.tar.gz
+
+# 设置环境变量使用 profile
+export HEADLESS=true
+export USE_XVFB=true
+export CHROME_PROFILE_DIR=./chrome_profile
+python login_humanlike.py
+```
+
+**优势：**
+- ✅ Profile 包含 Cloudflare 验证通过的 cookies 和浏览器指纹
+- ✅ 可以绕过 AWS IP 被标记的问题
+- ✅ 不需要配置代理服务器
+- ✅ 一次保存，多次使用
 
 ## 配置说明
 
@@ -185,6 +227,7 @@ python login_humanlike.py
 |--------|------|--------|------|
 | `HEADLESS` | 是否使用 headless 模式 | `true` | `true` / `false` |
 | `USE_XVFB` | 是否使用 Xvfb 虚拟显示（仅 Linux） | `false` | `true` / `false` |
+| `CHROME_PROFILE_DIR` | Chrome profile 目录路径（保存 cookies、缓存等） | 临时目录 | `./chrome_profile` |
 
 **使用示例：**
 ```bash
@@ -200,6 +243,11 @@ python login_humanlike.py
 # 标准 Headless（已优化，但可能被检测）
 export HEADLESS=true
 python login_humanlike.py
+
+# 使用 Chrome Profile（推荐用于 AWS 环境）
+export HEADLESS=false
+export CHROME_PROFILE_DIR=./chrome_profile
+python login_humanlike.py  # 本地成功登录后，复制 profile 到 AWS
 ```
 
 ### 可调参数
@@ -262,6 +310,51 @@ python login_humanlike.py
 - 脚本会保持浏览器打开，便于人工排查
 - 检查浏览器控制台的错误信息
 - 验证 `.env` 中的凭据是否正确
+
+#### 5. AWS 环境无法通过 Cloudflare 验证（IP 被标记）
+**症状**：本地可以成功登录，但在 AWS EC2 上失败，Cloudflare 验证无法通过
+
+**可能原因**：
+- AWS IP 地址被 Cloudflare 标记为数据中心 IP
+- Cloudflare 对 AWS IP 段有更严格的检测
+
+**解决方案（推荐）：使用 Chrome Profile**
+1. **在本地成功登录一次**：
+   ```bash
+   export HEADLESS=false
+   export CHROME_PROFILE_DIR=./chrome_profile
+   python login_humanlike.py
+   ```
+
+2. **打包 profile 目录**：
+   ```bash
+   tar -czf chrome_profile.tar.gz chrome_profile/
+   ```
+
+3. **上传到 AWS**：
+   ```bash
+   scp chrome_profile.tar.gz user@aws-server:/path/to/enrollware_login/
+   ```
+
+4. **在 AWS 中使用**：
+   ```bash
+   cd /path/to/enrollware_login
+   tar -xzf chrome_profile.tar.gz
+   export HEADLESS=true
+   export USE_XVFB=true
+   export CHROME_PROFILE_DIR=./chrome_profile
+   python login_humanlike.py
+   ```
+
+**为什么有效**：
+- Chrome Profile 包含 Cloudflare 验证通过的 cookies
+- 包含浏览器指纹信息，让 Cloudflare 认为这是同一个浏览器
+- 即使 IP 不同，也能通过验证
+
+**注意事项**：
+- Profile 目录可能较大（几十到几百 MB），需要确保有足够空间
+- Profile 中的 cookies 可能会过期，如果失败需要重新生成
+- 建议定期更新 profile（每周或每月）
 
 ### 调试技巧
 
@@ -352,6 +445,7 @@ enrollware_login/
 | **Chrome 指纹修改** | 修改浏览器指纹特征 | undetected-chromedriver 内置 |
 | **Xvfb 虚拟显示** | 绕过 headless 检测（Linux） | Xvfb 虚拟显示服务器 |
 | **浏览器参数优化** | 添加反检测启动参数 | `--disable-blink-features=AutomationControlled` 等 |
+| **Chrome Profile 复用** | 使用保存的 profile 绕过 IP 标记 | `CHROME_PROFILE_DIR` 环境变量 |
 
 **Headless 模式特殊优化**：
 - ✅ 使用 `--headless=new`（Chrome 109+ 的新 headless 模式）
@@ -368,6 +462,12 @@ enrollware_login/
 - ✅ Headless 模式下的 Cloudflare 绕过成功率显著提升
 
 ## 更新日志
+
+### v1.3.0 (2026-02-03)
+- ✅ **Chrome Profile 支持**：添加 Chrome profile 目录支持，可以保存和复用 cookies、缓存
+- ✅ **AWS IP 绕过方案**：通过使用本地保存的 profile，绕过 AWS IP 被 Cloudflare 标记的问题
+- ✅ **Profile 持久化**：支持通过 `CHROME_PROFILE_DIR` 环境变量指定 profile 目录
+- ✅ **文档完善**：添加详细的 Chrome Profile 使用说明和故障排查指南
 
 ### v1.2.0 (2026-02-03)
 - ✅ **Headless 模式优化**：大幅改进 headless 模式下的 Cloudflare 绕过成功率
