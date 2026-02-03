@@ -133,23 +133,74 @@ python login_humanlike.py
 - 将日志保存到 `login_humanlike.log` 文件
 
 ### 浏览器模式
+
+#### 可见模式（推荐用于调试）
 默认使用**可见浏览器**（`headless=False`），便于：
 - 观察自动化过程
 - 人工排查问题
 - 调试 Cloudflare 验证
 
-如需使用 headless 模式，修改 `login_humanlike.py`：
-```python
-driver = create_chrome_driver(headless=True)
+#### Headless 模式（无头模式）
+Headless 模式适合在服务器环境运行，但 Cloudflare 更容易检测 headless 浏览器。
+
+**方法 1：使用 Xvfb（推荐，Linux 系统）**
+Xvfb 创建一个虚拟显示，让浏览器以为有真实显示器，从而绕过 Cloudflare 检测：
+
+```bash
+# 1. 安装 Xvfb（如果未安装）
+sudo apt-get install xvfb
+
+# 2. 设置环境变量启用 Xvfb
+export HEADLESS=true
+export USE_XVFB=true
+
+# 3. 运行脚本
+python login_humanlike.py
 ```
+
+**方法 2：标准 Headless 模式**
+如果无法使用 Xvfb，可以使用标准 headless 模式（已优化反检测参数）：
+
+```bash
+export HEADLESS=true
+python login_humanlike.py
+```
+
+**环境变量说明：**
+- `HEADLESS=true`：启用 headless 模式（默认：`true`）
+- `USE_XVFB=true`：启用 Xvfb 虚拟显示（仅 Linux，默认：`false`）
 
 ## 配置说明
 
-### 环境变量（.env）
+### 环境变量
+
+#### .env 文件（敏感信息）
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
 | `USERNAME` | Enrollware 登录邮箱 | `user@example.com` |
 | `PASSWORD` | Enrollware 登录密码 | `your_password` |
+
+#### 系统环境变量（运行模式）
+| 变量名 | 说明 | 默认值 | 示例 |
+|--------|------|--------|------|
+| `HEADLESS` | 是否使用 headless 模式 | `true` | `true` / `false` |
+| `USE_XVFB` | 是否使用 Xvfb 虚拟显示（仅 Linux） | `false` | `true` / `false` |
+
+**使用示例：**
+```bash
+# 可见模式（调试用）
+export HEADLESS=false
+python login_humanlike.py
+
+# Headless + Xvfb（推荐，绕过 Cloudflare）
+export HEADLESS=true
+export USE_XVFB=true
+python login_humanlike.py
+
+# 标准 Headless（已优化，但可能被检测）
+export HEADLESS=true
+python login_humanlike.py
+```
 
 ### 可调参数
 在 `login_humanlike.py` 中可以调整：
@@ -171,17 +222,25 @@ driver = create_chrome_driver(headless=True)
 - 确保 Chrome 浏览器已安装并更新到 144 版本
 
 #### 2. Cloudflare 验证失败
-**症状**：日志显示 "未检测到 Cloudflare iframe" 或 "Shadow root not found"
+**症状**：日志显示 "未检测到 Cloudflare iframe" 或 "Shadow root not found"，或在 headless 模式下无法通过验证
 
 **可能原因**：
 - iframe 加载时间较长
 - Shadow DOM 结构变化
-- 被 Cloudflare 检测为自动化
+- 被 Cloudflare 检测为自动化（headless 模式更容易被检测）
 
 **解决方案**：
+- **推荐方案**：使用 Xvfb 虚拟显示（Linux 系统）
+  ```bash
+  sudo apt-get install xvfb
+  export HEADLESS=true
+  export USE_XVFB=true
+  python login_humanlike.py
+  ```
 - 检查日志中的详细错误信息
 - 增加等待时间（修改 `human_like_delay`）
 - 确保反检测脚本正确执行
+- 如果使用 headless 模式，脚本已自动注入额外的反检测 CDP 脚本
 
 #### 3. 元素定位失败
 **症状**：`TimeoutException` 或 `NoSuchElementException`
@@ -282,23 +341,40 @@ enrollware_login/
 
 ### 反检测措施详解
 
-本项目使用 **undetected-chromedriver**，它内置了全面的反检测功能：
+本项目使用 **undetected-chromedriver**，它内置了全面的反检测功能，并在此基础上进行了额外优化：
 
 | 措施 | 说明 | 实现方式 |
 |------|------|----------|
-| **隐藏自动化标识** | 完全隐藏 `navigator.webdriver` | undetected-chromedriver 内置 |
+| **隐藏自动化标识** | 完全隐藏 `navigator.webdriver` | undetected-chromedriver 内置 + CDP 脚本 |
 | **修改 Chrome 特征** | 移除自动化相关的启动参数 | undetected-chromedriver 自动处理 |
-| **CDP 脚本注入** | 在页面加载前注入反检测脚本 | undetected-chromedriver 自动处理 |
-| **User-Agent 伪装** | 使用真实的浏览器 User-Agent | undetected-chromedriver 自动处理 |
+| **CDP 脚本注入** | 在页面加载前注入反检测脚本 | undetected-chromedriver + 自定义 CDP 脚本 |
+| **User-Agent 伪装** | 移除 HeadlessChrome 标识 | 自定义 User-Agent（headless 模式） |
 | **Chrome 指纹修改** | 修改浏览器指纹特征 | undetected-chromedriver 内置 |
+| **Xvfb 虚拟显示** | 绕过 headless 检测（Linux） | Xvfb 虚拟显示服务器 |
+| **浏览器参数优化** | 添加反检测启动参数 | `--disable-blink-features=AutomationControlled` 等 |
+
+**Headless 模式特殊优化**：
+- ✅ 使用 `--headless=new`（Chrome 109+ 的新 headless 模式）
+- ✅ 注入额外的 CDP 脚本隐藏 `navigator.webdriver`、`window.chrome` 等
+- ✅ 覆盖 `navigator.plugins`、`navigator.languages` 等指纹特征
+- ✅ 移除 User-Agent 中的 "HeadlessChrome" 标识
+- ✅ **推荐**：使用 Xvfb 虚拟显示，让浏览器以为有真实显示器
 
 **优势**：
 - ✅ 无需手动配置复杂的反检测参数
 - ✅ 自动处理 ChromeDriver 版本匹配
 - ✅ 内置多种反检测技术，比手动配置更可靠
 - ✅ 支持指定 Chrome 版本（本项目使用 Chrome 144）
+- ✅ Headless 模式下的 Cloudflare 绕过成功率显著提升
 
 ## 更新日志
+
+### v1.2.0 (2026-02-03)
+- ✅ **Headless 模式优化**：大幅改进 headless 模式下的 Cloudflare 绕过成功率
+- ✅ **Xvfb 支持**：添加 Xvfb 虚拟显示支持（Linux），推荐用于 headless 模式
+- ✅ **增强反检测**：添加更多 CDP 脚本和浏览器参数来隐藏自动化特征
+- ✅ **User-Agent 优化**：移除 HeadlessChrome 标识，使用真实浏览器 User-Agent
+- ✅ **环境变量控制**：通过 `HEADLESS` 和 `USE_XVFB` 环境变量灵活控制运行模式
 
 ### v1.1.0 (2026-01-29)
 - ✅ 迁移到 `undetected-chromedriver`，简化反检测配置

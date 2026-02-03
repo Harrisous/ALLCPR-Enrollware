@@ -7,13 +7,20 @@
 - 逐字符输入，带随机延迟
 - 模拟真实人类操作节奏
 - 自动处理 Cloudflare Turnstile 验证（包括 Shadow DOM）
+- 优化的 headless 模式，支持 Xvfb 虚拟显示（推荐用于绕过 Cloudflare）
+
+运行模式：
+- 可见模式：HEADLESS=false（默认，用于调试）
+- Headless + Xvfb：HEADLESS=true USE_XVFB=true（推荐，Linux 系统）
+- 标准 Headless：HEADLESS=true（已优化，但可能被检测）
 """
 import logging
 import os
 import random
+import subprocess
 import sys
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 import undetected_chromedriver as uc
@@ -52,7 +59,61 @@ def load_credentials() -> Tuple[str, str]:
     return username, password
 
 
-def create_chrome_driver(headless: bool = False) -> uc.Chrome:
+def start_xvfb(display_num: str = ":99") -> Optional[subprocess.Popen]:
+    """
+    启动 Xvfb 虚拟显示服务器（仅 Linux）。
+    
+    Args:
+        display_num: 显示编号，例如 ":99"
+        
+    Returns:
+        subprocess.Popen 对象，如果启动失败则返回 None
+    """
+    if sys.platform != "linux":
+        logging.warning("Xvfb 仅在 Linux 系统上可用")
+        return None
+    
+    try:
+        # 检查 Xvfb 是否已运行
+        result = subprocess.run(
+            ['pgrep', '-f', f'Xvfb.*{display_num}'],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            logging.info(f"Xvfb 已在显示 {display_num} 上运行")
+            os.environ['DISPLAY'] = display_num
+            return None
+        
+        # 启动 Xvfb
+        logging.info(f"启动 Xvfb 虚拟显示服务器 (DISPLAY={display_num})...")
+        xvfb_process = subprocess.Popen(
+            ['Xvfb', display_num, '-screen', '0', '1920x1080x24', '-ac', '+extension', 'RANDR'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # 等待一下确保 Xvfb 启动完成
+        time.sleep(1)
+        
+        # 检查进程是否还在运行
+        if xvfb_process.poll() is None:
+            os.environ['DISPLAY'] = display_num
+            logging.info(f"Xvfb 已成功启动 (PID: {xvfb_process.pid})")
+            return xvfb_process
+        else:
+            logging.warning("Xvfb 启动失败")
+            return None
+            
+    except FileNotFoundError:
+        logging.warning("Xvfb 未安装。安装命令: sudo apt-get install xvfb")
+        return None
+    except Exception as e:
+        logging.exception(f"启动 Xvfb 时出错: {e}")
+        return None
+
+
+def create_chrome_driver(headless: bool = False, use_xvfb: bool = False) -> uc.Chrome:
     """
     使用 undetected-chromedriver 创建 Chrome WebDriver。
     
@@ -60,20 +121,37 @@ def create_chrome_driver(headless: bool = False) -> uc.Chrome:
 
     Args:
         headless: 是否使用无头模式（默认 False，便于观察和调试）
+        use_xvfb: 是否使用 Xvfb 虚拟显示（仅 Linux，推荐用于 headless 模式）
 
     Returns:
         uc.Chrome: undetected-chromedriver 实例
     """
-    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s）...", headless)
+    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s，use_xvfb=%s）...", 
+                 headless, use_xvfb)
     
     try:
         # 配置 Chrome 选项
         options = uc.ChromeOptions()
         
-        if headless:
+        if headless and not use_xvfb:
+            # 使用新的 headless 模式，并添加更多反检测参数
             options.add_argument("--headless=new")
+            # 移除 headless 标识的关键参数
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            # 添加更多反检测参数
+            options.add_argument("--disable-features=IsolateOrigins,site-per-process,VizDisplayCompositor")
+            # 模拟真实浏览器的窗口大小和行为
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--start-maximized")
+            # 禁用一些可能暴露自动化的特征
+            options.add_argument("--disable-extensions")
+            options.add_argument("--no-first-run")
+            options.add_argument("--disable-default-apps")
+            # 添加语言和区域设置
+            options.add_argument("--lang=en-US,en")
+            options.add_argument("--accept-lang=en-US,en")
         
-        # 基本参数
+        # 基本参数（所有模式都需要）
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
@@ -83,18 +161,67 @@ def create_chrome_driver(headless: bool = False) -> uc.Chrome:
         # 允许不安全内容（某些 Cloudflare 资源可能需要）
         options.add_argument("--allow-running-insecure-content")
         
+        # 设置 User-Agent（移除 HeadlessChrome 标识）
+        # undetected-chromedriver 会自动处理，但我们可以确保它正确
+        options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
+        
         # 使用 undetected-chromedriver 创建驱动
         # version_main=144 指定 Chrome 144 版本
         driver = uc.Chrome(
             options=options,
             version_main=144,  # 指定 Chrome 144 版本
-            headless=headless,
+            headless=headless and not use_xvfb,  # 如果使用 Xvfb，不使用 headless 模式
             use_subprocess=True,  # 使用子进程模式，更稳定
         )
         
+        # 如果使用 Xvfb，DISPLAY 环境变量已在 start_xvfb 中设置
+        if use_xvfb:
+            display_num = os.getenv('DISPLAY', ':99')
+            logging.info(f"使用 Xvfb 虚拟显示: {display_num}")
+        
         # 最大化窗口（如果不是 headless 模式）
-        if not headless:
-            driver.maximize_window()
+        if not headless or use_xvfb:
+            try:
+                driver.maximize_window()
+            except Exception:
+                pass
+        
+        # 在 headless 模式下，通过 CDP 进一步隐藏自动化特征
+        if headless and not use_xvfb:
+            try:
+                # 执行 CDP 命令来隐藏 headless 特征
+                driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                    'source': '''
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        });
+                        // 覆盖 chrome 对象
+                        window.chrome = {
+                            runtime: {},
+                            loadTimes: function() {},
+                            csi: function() {},
+                            app: {}
+                        };
+                        // 覆盖 permissions
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) => (
+                            parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                        );
+                        // 覆盖 plugins
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3, 4, 5]
+                        });
+                        // 覆盖 languages
+                        Object.defineProperty(navigator, 'languages', {
+                            get: () => ['en-US', 'en']
+                        });
+                    '''
+                })
+                logging.info("已注入额外的反检测脚本（CDP）")
+            except Exception as e:
+                logging.warning(f"注入 CDP 脚本失败（不影响使用）: {e}")
         
         logging.info("Chrome WebDriver 已启动（undetected-chromedriver，Chrome 144）。")
         return driver
@@ -626,6 +753,16 @@ def main() -> int:
     # 默认在 EC2 上使用 headless，本地可以通过设置 HEADLESS=false 来禁用
     is_headless = os.getenv("HEADLESS", "true").lower() == "true"
     
+    # 检查是否使用 Xvfb（推荐用于 headless 模式，绕过 Cloudflare 检测）
+    # 设置 USE_XVFB=true 来启用 Xvfb 虚拟显示
+    use_xvfb = os.getenv("USE_XVFB", "false").lower() == "true"
+    
+    # 如果 headless=True 且未指定 USE_XVFB，在 Linux 上自动尝试使用 Xvfb
+    if is_headless and not use_xvfb and sys.platform == "linux":
+        logging.info("检测到 headless 模式，建议使用 Xvfb 以提高 Cloudflare 绕过成功率")
+        logging.info("设置环境变量 USE_XVFB=true 来启用 Xvfb，或手动安装: sudo apt-get install xvfb")
+    
+    xvfb_process = None
     try:
         username, password = load_credentials()
     except Exception as e:
@@ -635,9 +772,17 @@ def main() -> int:
 
     driver = None
     try:
+        # 如果使用 Xvfb，先启动虚拟显示服务器
+        if use_xvfb and is_headless:
+            xvfb_process = start_xvfb()
+            if xvfb_process is None and sys.platform == "linux":
+                logging.warning("Xvfb 启动失败，将使用标准 headless 模式")
+                use_xvfb = False
+        
         # 创建 Chrome（根据环境变量决定是否 headless）
-        logging.info("运行模式: %s", "headless" if is_headless else "visible")
-        driver = create_chrome_driver(headless=is_headless)
+        mode_description = "headless (Xvfb)" if (is_headless and use_xvfb) else ("headless" if is_headless else "visible")
+        logging.info("运行模式: %s", mode_description)
+        driver = create_chrome_driver(headless=is_headless, use_xvfb=use_xvfb)
 
         # 执行人类化登录
         success = perform_humanlike_login(driver, username, password)
@@ -667,6 +812,19 @@ def main() -> int:
         if driver is not None:
             logging.info("关闭浏览器。")
             driver.quit()
+        
+        # 清理 Xvfb 进程（如果是由我们启动的）
+        if xvfb_process is not None:
+            try:
+                logging.info(f"关闭 Xvfb 进程 (PID: {xvfb_process.pid})")
+                xvfb_process.terminate()
+                xvfb_process.wait(timeout=5)
+            except Exception as e:
+                logging.warning(f"关闭 Xvfb 进程时出错: {e}")
+                try:
+                    xvfb_process.kill()
+                except Exception:
+                    pass
 
         logging.info("===== Enrollware 人类化自动登录脚本结束 =====")
         return return_code
