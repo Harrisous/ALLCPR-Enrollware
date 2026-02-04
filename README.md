@@ -228,6 +228,7 @@ python login_humanlike.py
 | `HEADLESS` | 是否使用 headless 模式 | `true` | `true` / `false` |
 | `USE_XVFB` | 是否使用 Xvfb 虚拟显示（仅 Linux） | `false` | `true` / `false` |
 | `CHROME_PROFILE_DIR` | Chrome profile 目录路径（保存 cookies、缓存等） | 临时目录 | `./chrome_profile` |
+| `PROXY_SERVER` | 代理服务器地址（用于绕过 AWS IP 检测） | 无 | `http://proxy.example.com:8080` 或 `socks5://127.0.0.1:8080` |
 
 **使用示例：**
 ```bash
@@ -248,6 +249,12 @@ python login_humanlike.py
 export HEADLESS=false
 export CHROME_PROFILE_DIR=./chrome_profile
 python login_humanlike.py  # 本地成功登录后，复制 profile 到 AWS
+
+# 使用代理服务器（推荐用于 AWS IP 被标记的情况）
+export PROXY_SERVER=http://your-proxy-server.com:8080
+export HEADLESS=true
+export USE_XVFB=true
+python login_humanlike.py
 ```
 
 ### 可调参数
@@ -356,6 +363,36 @@ python login_humanlike.py  # 本地成功登录后，复制 profile 到 AWS
 - Profile 中的 cookies 可能会过期，如果失败需要重新生成
 - 建议定期更新 profile（每周或每月）
 
+**解决方案 2：使用代理服务器（推荐）**
+
+如果 Chrome Profile 方法无效，可以使用代理服务器绕过 AWS IP 检测：
+
+1. **搭建本地代理服务器**（详见 `proxy_setup.md`）：
+   ```bash
+   # 在本地 WSL 中启动代理服务器
+   python3 local_proxy.py --host 0.0.0.0 --port 8080 --allowed-ips YOUR_AWS_EC2_IP
+   ```
+
+2. **配置路由器端口转发**（如果有公网 IP）：
+   - 将外部端口 8080 转发到本地代理服务器
+
+3. **在 AWS EC2 上使用代理**：
+   ```bash
+   export PROXY_SERVER=http://your-public-ip:8080
+   export HEADLESS=true
+   export USE_XVFB=true
+   python login_humanlike.py
+   ```
+
+**为什么有效**：
+- 代理服务器使用本地网络 IP（通常是住宅 IP），不会被 Cloudflare 标记
+- AWS EC2 通过代理访问，目标网站看到的是代理服务器的 IP
+
+**详细步骤**：请参考 `proxy_setup.md` 文件，包含三种代理搭建方案：
+- 方案 A：Python 简单代理（有公网 IP）
+- 方案 B：SSH Tunnel（无需公网 IP）
+- 方案 C：Cloudflare Tunnel（无公网 IP）
+
 ### 调试技巧
 
 1. **查看详细日志**：
@@ -376,6 +413,8 @@ python login_humanlike.py  # 本地成功登录后，复制 profile 到 AWS
 ```
 enrollware_login/
 ├── login_humanlike.py    # 主脚本文件
+├── local_proxy.py        # 本地代理服务器（可选）
+├── proxy_setup.md        # 代理搭建详细指南
 ├── requirements.txt      # Python 依赖包
 ├── .env                  # 环境变量配置（不提交到 Git）
 ├── login_humanlike.log   # 运行日志
@@ -462,6 +501,13 @@ enrollware_login/
 - ✅ Headless 模式下的 Cloudflare 绕过成功率显著提升
 
 ## 更新日志
+
+### v1.4.0 (2026-02-04)
+- ✅ **代理服务器支持**：添加代理服务器配置支持，可以绕过 AWS IP 被 Cloudflare 检测
+- ✅ **本地代理工具**：新增 `local_proxy.py` 简单 HTTP/HTTPS 代理服务器
+- ✅ **代理搭建指南**：新增 `proxy_setup.md` 详细指南，包含三种代理搭建方案
+- ✅ **代码更新**：`create_chrome_driver` 函数支持 `proxy_server` 参数
+- ✅ **环境变量**：新增 `PROXY_SERVER` 环境变量配置
 
 ### v1.3.0 (2026-02-03)
 - ✅ **Chrome Profile 支持**：添加 Chrome profile 目录支持，可以保存和复用 cookies、缓存

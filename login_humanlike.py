@@ -119,7 +119,7 @@ def start_xvfb(display_num: str = ":99") -> Optional[subprocess.Popen]:
         return None
 
 
-def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_data_dir: Optional[str] = None) -> uc.Chrome:
+def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_data_dir: Optional[str] = None, proxy_server: Optional[str] = None) -> uc.Chrome:
     """
     使用 undetected-chromedriver 创建 Chrome WebDriver。
     
@@ -129,12 +129,13 @@ def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_da
         headless: 是否使用无头模式（默认 False，便于观察和调试）
         use_xvfb: 是否使用 Xvfb 虚拟显示（仅 Linux，推荐用于 headless 模式）
         user_data_dir: Chrome profile 数据目录路径（如果提供，将使用该目录保存 cookies、缓存等）
+        proxy_server: 代理服务器地址（格式：http://host:port 或 socks5://host:port，用于绕过 AWS IP 检测）
 
     Returns:
         uc.Chrome: undetected-chromedriver 实例
     """
-    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s，use_xvfb=%s，user_data_dir=%s）...", 
-                 headless, use_xvfb, user_data_dir if user_data_dir else "默认临时目录")
+    logging.info("正在创建 Chrome WebDriver（使用 undetected-chromedriver，headless=%s，use_xvfb=%s，user_data_dir=%s，proxy=%s）...", 
+                 headless, use_xvfb, user_data_dir if user_data_dir else "默认临时目录", proxy_server if proxy_server else "无")
     
     try:
         # 配置 Chrome 选项
@@ -179,6 +180,12 @@ def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_da
         # 设置 User-Agent（移除 HeadlessChrome 标识）
         # undetected-chromedriver 会自动处理，但我们可以确保它正确
         options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
+        
+        # 配置代理服务器（用于绕过 AWS IP 检测）
+        if proxy_server:
+            logging.info(f"配置代理服务器: {proxy_server}")
+            options.add_argument(f"--proxy-server={proxy_server}")
+            logging.info("代理服务器已配置，将使用代理访问网站以绕过 AWS IP 检测")
         
         # 使用 undetected-chromedriver 创建驱动
         # version_main=144 指定 Chrome 144 版本
@@ -787,6 +794,17 @@ def main() -> int:
         logging.info("未指定 CHROME_PROFILE_DIR，将使用临时目录（数据不会保存）")
         chrome_profile_dir = None
     
+    # 读取代理服务器配置（用于绕过 AWS IP 检测）
+    # 格式：http://host:port 或 socks5://host:port
+    # 示例：PROXY_SERVER=http://proxy.example.com:8080
+    proxy_server = os.getenv("PROXY_SERVER", "").strip()
+    if proxy_server:
+        logging.info(f"检测到代理服务器配置: {proxy_server}")
+        logging.info("将使用代理服务器访问网站，以绕过 AWS IP 被 Cloudflare 检测的问题")
+    else:
+        logging.info("未配置代理服务器，将直接连接（如果 AWS IP 被标记，建议配置代理）")
+        proxy_server = None
+    
     # 如果 headless=True 且未指定 USE_XVFB，在 Linux 上自动尝试使用 Xvfb
     if is_headless and not use_xvfb and sys.platform == "linux":
         logging.info("检测到 headless 模式，建议使用 Xvfb 以提高 Cloudflare 绕过成功率")
@@ -812,7 +830,7 @@ def main() -> int:
         # 创建 Chrome（根据环境变量决定是否 headless）
         mode_description = "headless (Xvfb)" if (is_headless and use_xvfb) else ("headless" if is_headless else "visible")
         logging.info("运行模式: %s", mode_description)
-        driver = create_chrome_driver(headless=is_headless, use_xvfb=use_xvfb, user_data_dir=chrome_profile_dir)
+        driver = create_chrome_driver(headless=is_headless, use_xvfb=use_xvfb, user_data_dir=chrome_profile_dir, proxy_server=proxy_server)
 
         # 执行人类化登录
         success = perform_humanlike_login(driver, username, password)
