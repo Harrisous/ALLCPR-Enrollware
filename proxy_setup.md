@@ -334,7 +334,187 @@ PROXY_SERVER=http://your-proxy-ip:8080
 
 3. 查看脚本日志，确认代理是否被使用
 
-### 问题 3：SSH Tunnel 连接断开
+### 问题 3：SSH Tunnel 连接超时（Connection timed out）
+
+**症状：** 在 AWS EC2 上执行 `ssh -D 8080 -N -f user@136.56.72.172` 时出现：
+```
+ssh: connect to host 136.56.72.172 port 22: Connection timed out
+```
+
+**可能原因和解决方案：**
+
+#### 原因 1：路由器端口转发未配置（最常见）
+
+SSH Tunnel 需要从公网访问你的 WSL，必须配置路由器端口转发。
+
+**检查步骤：**
+1. 登录路由器管理界面（通常是 `http://192.168.86.1`）
+2. 查找"端口转发"或"虚拟服务器"设置
+3. 确认是否有以下规则：
+   - **外部端口**: `22`
+   - **内部 IP**: `192.168.86.100`（你的 Windows 主机 IP）
+   - **内部端口**: `22`
+   - **协议**: TCP
+
+**如果没有配置，添加规则：**
+- TP-Link: 高级功能 → 虚拟服务器 → 添加新条目
+- 华硕: 高级设置 → 虚拟服务器 → 添加
+- 小米: 高级设置 → 端口转发 → 添加规则
+- 华为: 高级功能 → NAT → 虚拟服务器 → 添加
+
+**测试端口转发：**
+```bash
+# 使用在线工具测试（在浏览器中访问）
+https://canyouseeme.org
+# 输入端口 22，点击 "Check Port"
+# 如果显示 "Success"，说明端口转发配置正确
+```
+
+#### 原因 2：Windows 防火墙阻止端口 22
+
+Windows 防火墙可能阻止了 SSH 端口的入站连接。
+
+**解决方案（在 Windows PowerShell 中运行）：**
+```powershell
+# 方法 1：使用图形界面
+# 设置 → 隐私和安全性 → Windows 安全中心 → 防火墙和网络保护 → 高级设置
+# 入站规则 → 新建规则 → 端口 → TCP → 22 → 允许连接
+
+# 方法 2：使用命令行（以管理员身份运行 PowerShell）
+New-NetFirewallRule -DisplayName "SSH" -Direction Inbound -LocalPort 22 -Protocol TCP -Action Allow
+```
+
+**测试 Windows 防火墙：**
+```powershell
+# 在 Windows PowerShell 中测试
+Test-NetConnection -ComputerName 192.168.86.100 -Port 22
+# 如果显示 TcpTestSucceeded: True，说明端口可访问
+```
+
+#### 原因 3：SSH 服务未在 WSL 中运行
+
+**检查 SSH 服务状态：**
+```bash
+# 在 WSL 中运行
+sudo systemctl status ssh
+```
+
+**如果服务未运行，启动服务：**
+```bash
+sudo systemctl start ssh
+sudo systemctl enable ssh
+```
+
+**检查 SSH 是否监听端口 22：**
+```bash
+# 在 WSL 中运行
+sudo netstat -tlnp | grep :22
+# 或
+sudo ss -tlnp | grep :22
+# 应该看到类似：0.0.0.0:22 或 :::22
+```
+
+#### 原因 4：WSL 防火墙阻止（如果启用了 ufw）
+
+**检查防火墙状态：**
+```bash
+# 在 WSL 中运行
+sudo ufw status
+```
+
+**如果防火墙已启用，开放 SSH 端口：**
+```bash
+sudo ufw allow 22/tcp
+sudo ufw reload
+```
+
+#### 原因 5：SSH 配置问题
+
+**检查 SSH 配置：**
+```bash
+# 在 WSL 中运行
+sudo nano /etc/ssh/sshd_config
+```
+
+**确保以下配置存在：**
+```
+Port 22
+AllowTcpForwarding yes
+GatewayPorts yes
+```
+
+**重启 SSH 服务：**
+```bash
+sudo systemctl restart ssh
+```
+
+#### 原因 6：AWS EC2 安全组阻止出站连接（罕见）
+
+AWS EC2 默认允许所有出站连接，但请确认安全组规则。
+
+**检查方法：**
+1. 登录 AWS 控制台 → EC2 → 安全组
+2. 检查出站规则是否允许所有流量（0.0.0.0/0）
+
+#### 快速诊断脚本
+
+**在 WSL 中运行诊断脚本：**
+```bash
+cd /home/harry/github_ALLCPR/ALLCPR-Enrollware
+bash troubleshoot_ssh.sh
+```
+
+这个脚本会自动检查：
+- SSH 服务状态
+- 端口监听情况
+- SSH 配置
+- 防火墙设置
+- 本地连接测试
+
+#### 逐步测试流程
+
+1. **测试本地 SSH 连接（在 WSL 中）：**
+   ```bash
+   ssh harry@localhost
+   # 如果成功，输入 exit 退出
+   ```
+
+2. **测试从 Windows 访问 WSL（在 Windows PowerShell 中）：**
+   ```powershell
+   Test-NetConnection -ComputerName 192.168.86.100 -Port 22
+   ```
+
+3. **测试从公网访问（使用在线工具）：**
+   - 访问 https://canyouseeme.org
+   - 输入端口 22
+   - 如果显示 "Success"，说明端口转发正确
+
+4. **测试从 AWS EC2 连接（详细模式）：**
+   ```bash
+   # 在 AWS EC2 上运行
+   ssh -v harry@136.56.72.172
+   # -v 参数显示详细连接信息，有助于诊断问题
+   ```
+
+5. **如果连接成功，建立 SSH 隧道：**
+   ```bash
+   ssh -D 8080 -N -f harry@136.56.72.172
+   ```
+
+#### 替代方案
+
+如果 SSH Tunnel 配置困难，可以考虑：
+
+1. **方案 A：Python 简单代理**（需要路由器端口转发 8080）
+   - 更简单，不需要 SSH
+   - 详见本文档"方案 A"部分
+
+2. **方案 C：Cloudflare Tunnel**（完全不需要端口转发）
+   - 不需要公网 IP
+   - 不需要配置路由器
+   - 详见本文档"方案 C"部分
+
+### 问题 4：SSH Tunnel 连接断开
 
 **症状：** SSH 连接中断，代理失效
 
@@ -355,7 +535,18 @@ PROXY_SERVER=http://your-proxy-ip:8080
    # 按 Ctrl+A 然后 D 分离会话
    ```
 
-### 问题 4：端口被占用
+3. 配置 SSH 保持连接参数：
+   ```bash
+   # 在 AWS EC2 上编辑 ~/.ssh/config
+   nano ~/.ssh/config
+   
+   # 添加：
+   Host 136.56.72.172
+       ServerAliveInterval 60
+       ServerAliveCountMax 3
+   ```
+
+### 问题 5：端口被占用
 
 **症状：** `Address already in use`
 
@@ -372,7 +563,7 @@ PROXY_SERVER=http://your-proxy-ip:8080
    python3 local_proxy.py --port 8888
    ```
 
-### 问题 5：IP 白名单拒绝连接
+### 问题 6：IP 白名单拒绝连接
 
 **症状：** 代理服务器日志显示 "拒绝来自 XXX 的连接"
 

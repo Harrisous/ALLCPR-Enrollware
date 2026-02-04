@@ -393,6 +393,11 @@ python login_humanlike.py
 - 方案 B：SSH Tunnel（无需公网 IP）
 - 方案 C：Cloudflare Tunnel（无公网 IP）
 
+**⚠️ SSH Tunnel 连接超时问题？**
+如果使用方案 B（SSH Tunnel）时遇到 `Connection timed out` 错误，请参考：
+- **快速修复指南**: `QUICK_FIX_SSH.md` - 最常见的解决方案
+- **完整故障排查**: `SSH_TROUBLESHOOTING.md` - 详细的诊断步骤
+
 ### 调试技巧
 
 1. **查看详细日志**：
