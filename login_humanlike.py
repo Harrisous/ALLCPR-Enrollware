@@ -177,6 +177,14 @@ def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_da
         # 允许不安全内容（某些 Cloudflare 资源可能需要）
         options.add_argument("--allow-running-insecure-content")
         
+        # WebRTC 泄露防护（防止泄露真实 IP，即使使用代理）
+        options.add_argument("--disable-webrtc")
+        options.add_argument("--disable-webrtc-hw-encoding")
+        options.add_argument("--disable-webrtc-hw-decoding")
+        options.add_argument("--disable-webrtc-multiple-routes")
+        options.add_argument("--disable-webrtc-hw-vp8-encoding")
+        options.add_argument("--disable-webrtc-ip-handling-policy")
+        
         # 设置 User-Agent（移除 HeadlessChrome 标识）
         # undetected-chromedriver 会自动处理，但我们可以确保它正确
         options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
@@ -208,42 +216,135 @@ def create_chrome_driver(headless: bool = False, use_xvfb: bool = False, user_da
             except Exception:
                 pass
         
-        # 在 headless 模式下，通过 CDP 进一步隐藏自动化特征
-        if headless and not use_xvfb:
-            try:
-                # 执行 CDP 命令来隐藏 headless 特征
-                driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-                    'source': '''
-                        Object.defineProperty(navigator, 'webdriver', {
-                            get: () => undefined
-                        });
-                        // 覆盖 chrome 对象
-                        window.chrome = {
-                            runtime: {},
-                            loadTimes: function() {},
-                            csi: function() {},
-                            app: {}
+        # 通过 CDP 注入增强的反检测脚本（包括 WebRTC 泄露防护）
+        # 无论是否 headless，都注入反检测脚本，确保代理环境下也能正常工作
+        try:
+            # 执行 CDP 命令来隐藏自动化特征和防止 WebRTC 泄露
+            driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                'source': r'''
+                    // 隐藏 webdriver 标识
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    
+                    // 删除 webdriver 属性
+                    delete Object.getPrototypeOf(navigator).webdriver;
+                    
+                    // 覆盖 chrome 对象
+                    window.chrome = {
+                        runtime: {},
+                        loadTimes: function() {},
+                        csi: function() {},
+                        app: {}
+                    };
+                    
+                    // 覆盖 permissions
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                    
+                    // 覆盖 plugins
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    
+                    // 覆盖 languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en']
+                    });
+                    
+                    // WebRTC 泄露防护 - 拦截 RTCPeerConnection
+                    const originalRTCPeerConnection = window.RTCPeerConnection;
+                    const originalRTCPeerConnection2 = window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+                    
+                    window.RTCPeerConnection = function(...args) {
+                        const pc = new originalRTCPeerConnection(...args);
+                        const originalCreateOffer = pc.createOffer.bind(pc);
+                        const originalCreateAnswer = pc.createAnswer.bind(pc);
+                        const originalSetLocalDescription = pc.setLocalDescription.bind(pc);
+                        
+                        // 拦截 createOffer，移除 IP 地址
+                        pc.createOffer = function(...args) {
+                            return originalCreateOffer(...args).then(offer => {
+                                if (offer && offer.sdp) {
+                                    // 移除所有 candidate 行（包含 IP 地址）
+                                    // 使用正则表达式匹配并移除包含 IP 的 candidate 行
+                                    offer.sdp = offer.sdp.replace(/a=candidate:.*[\r\n]+/g, '');
+                                    offer.sdp = offer.sdp.replace(/a=rtcp:.*[\r\n]+/g, '');
+                                }
+                                return offer;
+                            }).catch(err => {
+                                console.error('createOffer error:', err);
+                                throw err;
+                            });
                         };
-                        // 覆盖 permissions
-                        const originalQuery = window.navigator.permissions.query;
-                        window.navigator.permissions.query = (parameters) => (
-                            parameters.name === 'notifications' ?
-                                Promise.resolve({ state: Notification.permission }) :
-                                originalQuery(parameters)
-                        );
-                        // 覆盖 plugins
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [1, 2, 3, 4, 5]
-                        });
-                        // 覆盖 languages
-                        Object.defineProperty(navigator, 'languages', {
-                            get: () => ['en-US', 'en']
-                        });
-                    '''
-                })
-                logging.info("已注入额外的反检测脚本（CDP）")
-            except Exception as e:
-                logging.warning(f"注入 CDP 脚本失败（不影响使用）: {e}")
+                        
+                        // 拦截 createAnswer，移除 IP 地址
+                        pc.createAnswer = function(...args) {
+                            return originalCreateAnswer(...args).then(answer => {
+                                if (answer && answer.sdp) {
+                                    answer.sdp = answer.sdp.replace(/a=candidate:.*[\r\n]+/g, '');
+                                    answer.sdp = answer.sdp.replace(/a=rtcp:.*[\r\n]+/g, '');
+                                }
+                                return answer;
+                            }).catch(err => {
+                                console.error('createAnswer error:', err);
+                                throw err;
+                            });
+                        };
+                        
+                        // 拦截 setLocalDescription，移除 IP 地址
+                        pc.setLocalDescription = function(...args) {
+                            if (args[0] && args[0].sdp) {
+                                args[0].sdp = args[0].sdp.replace(/a=candidate:.*[\r\n]+/g, '');
+                                args[0].sdp = args[0].sdp.replace(/a=rtcp:.*[\r\n]+/g, '');
+                            }
+                            return originalSetLocalDescription(...args);
+                        };
+                        
+                        return pc;
+                    };
+                    
+                    // 拦截其他 WebRTC API
+                    if (originalRTCPeerConnection2) {
+                        window.webkitRTCPeerConnection = window.RTCPeerConnection;
+                        window.mozRTCPeerConnection = window.RTCPeerConnection;
+                    }
+                    
+                    // 禁用 getDisplayMedia（防止屏幕共享泄露）
+                    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                        const originalGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+                        navigator.mediaDevices.getDisplayMedia = function(...args) {
+                            return Promise.reject(new Error('getDisplayMedia is not supported'));
+                        };
+                    }
+                    
+                    // 覆盖 getUserMedia（可选，进一步防护）
+                    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                        const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+                        navigator.mediaDevices.getUserMedia = function(...args) {
+                            // 允许但记录，用于调试
+                            return originalGetUserMedia(...args);
+                        };
+                    }
+                    
+                    // 覆盖 RTCDataChannel（防止数据通道泄露）
+                    if (window.RTCDataChannel) {
+                        const originalRTCDataChannel = window.RTCDataChannel;
+                        window.RTCDataChannel = function(...args) {
+                            const channel = new originalRTCDataChannel(...args);
+                            // 可以在这里添加额外的拦截逻辑
+                            return channel;
+                        };
+                    }
+                '''
+            })
+            logging.info("已注入增强的反检测脚本（包括 WebRTC 泄露防护）")
+        except Exception as e:
+            logging.warning(f"注入 CDP 脚本失败（不影响使用）: {e}")
         
         logging.info("Chrome WebDriver 已启动（undetected-chromedriver，Chrome 144）。")
         return driver
