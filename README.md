@@ -2,6 +2,25 @@
 
 使用 Selenium 模拟人类行为自动登录 Enrollware 管理后台，支持绕过 Cloudflare Turnstile 验证。
 
+## 完整运行指令（EC2）
+```bash
+# 1. 确保时区已设置（只需运行一次）
+sudo timedatectl set-timezone America/New_York
+
+# 2. 确保 SSH 隧道运行
+ssh -D 8080 -N -f 用户@[公网ip]
+
+# 3. 设置环境变量并运行脚本
+export TZ=America/New_York
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PROXY_SERVER=socks5://127.0.0.1:8080 # must
+export HEADLESS=true # must
+export USE_XVFB=true # optional, 如果上面为false则需要这个为true
+export CHROME_PROFILE_DIR=./chrome_profile # optional
+
+python login_humanlike.py
+```
 ## 项目简介
 
 本项目实现了一个智能的自动化登录脚本，能够：
@@ -646,17 +665,6 @@ enrollware_login/
 - ✅ 添加反自动化检测措施
 - ✅ 完整的日志记录系统
 
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 许可证
-
-本项目仅供学习和个人使用。
-
-## 联系方式
-
-如有问题或建议，请通过 Issue 反馈。
 
 ---
 
