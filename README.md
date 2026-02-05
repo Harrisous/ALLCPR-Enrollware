@@ -255,6 +255,23 @@ export PROXY_SERVER=http://your-proxy-server.com:8080
 export HEADLESS=true
 export USE_XVFB=true
 python login_humanlike.py
+
+# 完整方案：代理 + Chrome Profile + 环境设置（最可靠，推荐用于 EC2）
+# 1. 设置 EC2 时区和语言环境
+sudo timedatectl set-timezone America/New_York
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# 2. 建立 SSH Tunnel（如果使用方案 B）
+ssh -D 8080 -N -f harry@YOUR_PUBLIC_IP
+
+# 3. 运行脚本（同时使用代理和 Profile）
+export TZ=America/New_York
+export PROXY_SERVER=socks5://127.0.0.1:8080
+export HEADLESS=true
+export USE_XVFB=true
+export CHROME_PROFILE_DIR=./chrome_profile
+python login_humanlike.py
 ```
 
 ### 可调参数
@@ -363,35 +380,117 @@ python login_humanlike.py
 - Profile 中的 cookies 可能会过期，如果失败需要重新生成
 - 建议定期更新 profile（每周或每月）
 
-**解决方案 2：使用代理服务器（推荐）**
+**解决方案 2：使用代理服务器 + Chrome Profile + 环境设置（最可靠）**
 
-如果 Chrome Profile 方法无效，可以使用代理服务器绕过 AWS IP 检测：
+即使使用了代理服务器，如果 EC2 和本地环境不一致（时区、语言环境、浏览器指纹等），仍然可能被 Cloudflare 拦截。以下是完整的解决方案：
 
-1. **搭建本地代理服务器**（详见 `proxy_setup.md`）：
-   ```bash
-   # 在本地 WSL 中启动代理服务器
-   python3 local_proxy.py --host 0.0.0.0 --port 8080 --allowed-ips YOUR_AWS_EC2_IP
-   ```
+#### 步骤 1：在本地 WSL 中成功登录并保存 Profile
 
-2. **配置路由器端口转发**（如果有公网 IP）：
-   - 将外部端口 8080 转发到本地代理服务器
+```bash
+# 在 WSL 中运行
+cd /home/harry/github_ALLCPR/ALLCPR-Enrollware
 
-3. **在 AWS EC2 上使用代理**：
-   ```bash
-   export PROXY_SERVER=http://your-public-ip:8080
-   export HEADLESS=true
-   export USE_XVFB=true
-   python login_humanlike.py
-   ```
+# 使用可见模式，手动完成 Cloudflare 验证
+export HEADLESS=false
+export CHROME_PROFILE_DIR=./chrome_profile
 
-**为什么有效**：
-- 代理服务器使用本地网络 IP（通常是住宅 IP），不会被 Cloudflare 标记
-- AWS EC2 通过代理访问，目标网站看到的是代理服务器的 IP
+# 运行脚本，手动完成 Cloudflare 验证
+python login_humanlike.py
+```
 
-**详细步骤**：请参考 `proxy_setup.md` 文件，包含三种代理搭建方案：
-- 方案 A：Python 简单代理（有公网 IP）
-- 方案 B：SSH Tunnel（无需公网 IP）
-- 方案 C：Cloudflare Tunnel（无公网 IP）
+登录成功后，Profile 会保存在 `chrome_profile/` 目录中。
+
+#### 步骤 2：打包并上传 Profile 到 EC2
+
+```bash
+# 在 WSL 中打包 profile（排除缓存以减小体积）
+tar -czf chrome_profile.tar.gz chrome_profile/ \
+    --exclude='chrome_profile/Default/Cache' \
+    --exclude='chrome_profile/Default/Code Cache' \
+    --exclude='chrome_profile/Default/GPUCache'
+
+# 上传到 EC2（替换 YOUR_EC2_IP）
+scp chrome_profile.tar.gz ubuntu@YOUR_EC2_IP:~/ALLCPR-Enrollware/
+```
+
+#### 步骤 3：设置 EC2 环境（重要！）
+
+**设置时区**（确保与本地 WSL 一致）：
+```bash
+# 在 EC2 上运行（例如设置为美国东部时间）
+sudo timedatectl set-timezone America/New_York
+
+# 验证设置
+timedatectl
+```
+
+**设置语言环境**：
+```bash
+# 在 EC2 上运行
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# 或添加到 ~/.bashrc 使其永久生效
+echo 'export LANG=en_US.UTF-8' >> ~/.bashrc
+echo 'export LC_ALL=en_US.UTF-8' >> ~/.bashrc
+```
+
+#### 步骤 4：在 EC2 上建立 SSH Tunnel 并运行脚本
+
+**使用 SSH Tunnel（方案 B）**：
+```bash
+# 在 EC2 上运行
+cd ~/ALLCPR-Enrollware
+
+# 解压 profile
+tar -xzf chrome_profile.tar.gz
+
+# 建立 SSH Tunnel（从 EC2 到本地 WSL）
+ssh -D 8080 -N -f harry@YOUR_PUBLIC_IP
+
+# 设置环境变量并运行脚本
+export TZ=America/New_York  # 与本地时区一致
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PROXY_SERVER=socks5://127.0.0.1:8080
+export HEADLESS=true
+export USE_XVFB=true
+export CHROME_PROFILE_DIR=./chrome_profile
+
+python login_humanlike.py
+```
+
+**或使用 HTTP 代理（方案 A）**：
+```bash
+# 在 EC2 上运行
+export TZ=America/New_York
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PROXY_SERVER=http://YOUR_PUBLIC_IP:8080
+export HEADLESS=true
+export USE_XVFB=true
+export CHROME_PROFILE_DIR=./chrome_profile
+
+python login_humanlike.py
+```
+
+#### 为什么这个组合方案有效？
+
+1. **代理服务器**：绕过 AWS IP 被标记的问题，使用本地住宅/公司 IP （AWS和本地的最重要区别）
+2. **Chrome Profile**：包含已通过的 cookies 和浏览器指纹，让 Cloudflare 认为是同一个浏览器 （实践中发现不是必须）
+3. **环境一致性**：时区和语言环境一致，减少浏览器指纹差异（ip切换后能绕过的关键）
+4. **WebRTC 防护**：脚本已内置 WebRTC 泄露防护，防止泄露真实 IP
+
+#### 其他代理方案
+
+**方案 A：Python 简单代理（有公网 IP）**
+详见 `proxy_setup.md` 方案 A
+
+**方案 B：SSH Tunnel（无需公网 IP）**
+详见 `proxy_setup.md` 方案 B
+
+**方案 C：Cloudflare Tunnel（无公网 IP）**
+详见 `proxy_setup.md` 方案 C
 
 **⚠️ SSH Tunnel 连接超时问题？**
 如果使用方案 B（SSH Tunnel）时遇到 `Connection timed out` 错误，请参考：
@@ -506,6 +605,13 @@ enrollware_login/
 - ✅ Headless 模式下的 Cloudflare 绕过成功率显著提升
 
 ## 更新日志
+
+### v1.5.0 (2026-02-04)
+- ✅ **WebRTC 泄露防护**：添加完整的 WebRTC IP 泄露防护机制，防止代理环境下泄露真实 IP
+- ✅ **EC2 环境设置指南**：添加 EC2 时区和语言环境设置说明，确保与本地环境一致
+- ✅ **组合方案优化**：完善代理 + Chrome Profile + 环境设置的组合方案，提高成功率
+- ✅ **增强反检测脚本**：无论是否 headless 都注入反检测脚本，确保代理环境下正常工作
+- ✅ **故障排查文档**：更新 README，添加完整的 EC2 环境配置步骤
 
 ### v1.4.0 (2026-02-04)
 - ✅ **代理服务器支持**：添加代理服务器配置支持，可以绕过 AWS IP 被 Cloudflare 检测
