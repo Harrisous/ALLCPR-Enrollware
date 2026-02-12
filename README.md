@@ -9,9 +9,12 @@ sudo timedatectl set-timezone America/New_York
 
 # 2. 确保 SSH 隧道运行
 ssh -D 8080 -N -f 用户@[公网ip]
+# -o ServerAliveInterval=60：保持连接（防止超时断开）
+ssh -D 8080 -N -f -o ServerAliveInterval=60 harry@136.56.72.172
 
 # 3. 设置环境变量并运行脚本
-export TZ=America/New_York
+# export TZ=America/New_York
+export TZ=America/Los_Angeles
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export PROXY_SERVER=socks5://127.0.0.1:8080 # must

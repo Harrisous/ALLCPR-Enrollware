@@ -362,6 +362,27 @@ SSH Tunnel 需要从公网访问你的 WSL，必须配置路由器端口转发�
 - 小米: 高级设置 → 端口转发 → 添加规则
 - 华为: 高级功能 → NAT → 虚拟服务器 → 添加
 
+**windows 转wsl**
+```bash
+# 步骤 1：获取 WSL IP 地址
+$wslIP = (wsl hostname -I).Trim()
+Write-Host "WSL IP: $wslIP"
+# 步骤 2：配置 Windows 端口转发
+# 删除旧的端口转发规则（如果存在）
+netsh interface portproxy delete v4tov4 listenport=22 listenaddress=0.0.0.0
+
+# 添加新的端口转发规则：Windows 端口 22 → WSL IP:22
+netsh interface portproxy add v4tov4 listenport=22 listenaddress=0.0.0.0 connectport=22 connectaddress=$wslIP
+
+# 查看配置
+netsh interface portproxy show all
+
+
+#步骤 3：确保防火墙允许
+# 确保防火墙规则存在（如果还没有）
+New-NetFirewallRule -DisplayName "SSH" -Direction Inbound -LocalPort 22 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
+```
+
 **测试端口转发：**
 ```bash
 # 使用在线工具测试（在浏览器中访问）
